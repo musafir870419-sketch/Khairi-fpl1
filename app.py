@@ -42,12 +42,22 @@ else:
     # ==========================================================
     ODDS_API_KEY = "4c5a97480b5a82fa022dd02e9833d8e7"
 
-    st.title("🏆 Enjin Portfolio 7 Skuad Juara FPL MFF (SOP v6.3 - Dynamic Scoring & End-to-End Fix)")
-    st.caption("Automasi Penuh: Taktikal Fleksibel, Sokongan Bek Menyerang & Underdog, Unjuran Mata FPL Rasmi")
+    st.title("🏆 Enjin Portfolio 7 Skuad Juara FPL MFF (SOP v6.4 - Actual vs Predicted Tracker)")
+    st.caption("Automasi Penuh: Perbandingan Mata Sebenar (Live API) vs Unjuran, Formasi Taktikal & Audit Skuad")
 
     @st.cache_data(ttl=1800)
     def fetch_fpl_api(endpoint):
         url = f"https://fantasy.premierleague.com/api/{endpoint}"
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        try:
+            with urllib.request.urlopen(req) as response:
+                return json.loads(response.read().decode())
+        except Exception:
+            return None
+
+    @st.cache_data(ttl=120)
+    def fetch_fpl_live(gw_id):
+        url = f"https://fantasy.premierleague.com/api/event/{gw_id}/live/"
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         try:
             with urllib.request.urlopen(req) as response:
@@ -71,6 +81,22 @@ else:
     if not fixtures_raw:
         st.error("Gagal menarik data perlawanan.")
         st.stop()
+
+    # Tarik data mata sebenar (Live Actual Points)
+    live_raw = fetch_fpl_live(gw_id)
+    actual_stats = {}
+    if live_raw and "elements" in live_raw:
+        for item in live_raw["elements"]:
+            pid = item["id"]
+            stats_dict = item.get("stats", {})
+            actual_stats[pid] = {
+                "actual_pts": stats_dict.get("total_points", 0),
+                "minutes": stats_dict.get("minutes", 0),
+                "goals": stats_dict.get("goals_scored", 0),
+                "assists": stats_dict.get("assists", 0),
+                "clean_sheets": stats_dict.get("clean_sheets", 0),
+                "bonus": stats_dict.get("bonus", 0)
+            }
 
     team_map = {t["id"]: t["name"] for t in fpl_raw["teams"]}
     role_map = {1: "GKP", 2: "DEF", 3: "MID", 4: "FWD"}
@@ -274,7 +300,6 @@ else:
                 "over_25_val": m["over_25"]
             }
 
-        # Formula Pengiraan Mata Rasmi FPL Fleksibel (Gol, Assist, Clean Sheet, Saves)
         def calculate_official_fpl_points(p, m_rule):
             role = p["role"]
             xgi = p["xGI"]
@@ -291,7 +316,6 @@ else:
             fdr = club_fdr.get(p["club"], 3)
             clean_sheet_prob = max(0.05, (6 - fdr) / 5.0)
             
-            # Jika perlawanan terbuka / ramalan banyak gol, rendahkan kebarangkalian clean sheet
             if m_rule and (m_rule["all_attack"] or m_rule["over_25_val"] < 1.75):
                 clean_sheet_prob *= 0.35
                 
@@ -327,19 +351,15 @@ else:
                 
             r = match_rules[m_info["id"]]
             
-            # PENAPISAN DINAMIK TERBARU:
-            # 1. Jangan sekat penyerang/pemain tengah underdog (cth: Tavernier, Scott, Isidor)
-            # Hanya elakkan pertahanan underdog pasif yang tiada potensi menyerang (xGI < 0.10)
             if r["underdog"] and r["underdog"].lower() in p_club.lower():
                 if p["role"] in ["GKP", "DEF"] and p["xGI"] < 0.10 and not (p.get("is_fk") or p.get("is_ck")):
                     continue
             
-            # 2. Bek menyerang / Wing-backs (cth: Mitchell, Bogle, Chilwell) tidak disingkirkan dalam perlawanan all-attack
             if r["all_attack"] and p["role"] in ["GKP", "DEF"]:
                 if p["role"] == "GKP":
-                    pass # Benarkan GKP kekal untuk mata saves
+                    pass
                 elif p["xGI"] < 0.05 and not (p.get("is_fk") or p.get("is_ck")):
-                    continue # Hanya buang bek tengah pasif yang tiada potensi menyerang
+                    continue
                     
             p_data = dict(p)
             p_data["fdr"] = club_fdr.get(p_club, 3)
@@ -347,7 +367,8 @@ else:
             eligible_players[p_name] = p_data
 
         odds_badge = "🟢 Auto-Odds Aktif" if odds_data else "🟡 Odds Asas Digunakan"
-        st.info(f"🟢 **Status ({gw_name}):** Mengunci **{len(matches)} perlawanan** | **{len(eligible_players)} pemain layak (Logik Dinamik Aktif)** | {odds_badge}")
+        live_badge = "⚡ Data Mata Sebenar Aktif" if actual_stats else "⏳ Menunggu Perlawanan Bermula"
+        st.info(f"🟢 **Status ({gw_name}):** Mengunci **{len(matches)} perlawanan** | **{len(eligible_players)} pemain layak** | {odds_badge} | {live_badge}")
 
         BLUEPRINTS = [
             {"name": "Skuad 1 (4-3-3 Attacking / 4-2-1-3)", "formation": "4-3-3", "xi": {"GKP": 1, "DEF": 4, "MID": 3, "FWD": 3}},
@@ -364,6 +385,9 @@ else:
                 if m["home"].lower() in club.lower() or m["away"].lower() in club.lower():
                     return m["id"]
             return None
+
+        def get_player_actual(p_id):
+            return actual_stats.get(p_id, {"actual_pts": 0, "minutes": 0, "goals": 0, "assists": 0, "clean_sheets": 0, "bonus": 0})
 
         def build_portfolio():
             global_counts = Counter()
@@ -443,7 +467,25 @@ else:
                 bench_g = [p for p in bench if p["role"] == "GKP"]
                 bench_out = sorted([p for p in bench if p["role"] != "GKP"], key=lambda x: x["fdr_score"], reverse=True)
                 
-                total_xi_pts = sum([p["fdr_score"] for p in xi]) + cap["fdr_score"]
+                # Unjuran Mata (Predicted Points)
+                total_proj_pts = sum([p["fdr_score"] for p in xi]) + cap["fdr_score"]
+                
+                # Mata Sebenar FPL (Actual Live Points)
+                cap_act = get_player_actual(cap["id"])
+                vc_act = get_player_actual(vc["id"]) if vc else {"actual_pts": 0, "minutes": 0}
+                
+                # Kapten 2x mata (jika kapten tak main, VC ambil alih)
+                total_act_pts = 0
+                for p in xi:
+                    act_p = get_player_actual(p["id"])
+                    total_act_pts += act_p["actual_pts"]
+                    
+                if cap_act["minutes"] > 0:
+                    total_act_pts += cap_act["actual_pts"]
+                elif vc_act["minutes"] > 0:
+                    total_act_pts += vc_act["actual_pts"]
+                else:
+                    total_act_pts += cap_act["actual_pts"]
                 
                 for p in selected:
                     global_counts[p["name"]] += 1
@@ -453,7 +495,11 @@ else:
                     "formation": bp["formation"],
                     "C": cap["name"] if cap else "-",
                     "VC": vc["name"] if vc else "-",
-                    "projected_pts": round(total_xi_pts, 1),
+                    "cap_id": cap["id"],
+                    "vc_id": vc["id"] if vc else None,
+                    "projected_pts": round(total_proj_pts, 1),
+                    "actual_pts": total_act_pts,
+                    "diff_pts": round(total_act_pts - total_proj_pts, 1),
                     "xi": xi,
                     "bench": bench_g + bench_out,
                     "clubs": dict(club_counts)
@@ -461,12 +507,32 @@ else:
                 
             return squads, global_counts
 
-        if st.button("🚀 Jana Portfolio 7 Skuad Juara Sekarang", type="primary"):
+        if st.button("🚀 Jana Portfolio 7 Skuad & Bandingkan Mata Sebenar", type="primary"):
             if len(eligible_players) < 15:
                 st.error("Pemain layak tidak mencukupi untuk membentuk skuad. Pilih sekurang-kurangnya 3-4 perlawanan.")
             else:
                 squads, exp_counts = build_portfolio()
-                st.subheader("📋 Rumusan Portfolio 7 Skuad Lengkap")
+
+                # ==========================================================
+                # PAPARAN 1: LEADERBOARD PERBANDINGAN SEBENAR VS UNJURAN
+                # ==========================================================
+                st.subheader("🎯 Kedudukan 7 Skuad: Mata Sebenar vs Unjuran Sistem")
+                
+                leaderboard_data = []
+                for idx, sq in enumerate(sorted(squads, key=lambda x: x["actual_pts"], reverse=True)):
+                    diff_badge = f"+{sq['diff_pts']}" if sq["diff_pts"] > 0 else f"{sq['diff_pts']}"
+                    leaderboard_data.append({
+                        "Kedudukan": f"#{idx+1}",
+                        "Skuad": sq["name"],
+                        "Kapten [C]": sq["C"],
+                        "Unjuran Sistem (Proj)": f"{sq['projected_pts']} pts",
+                        "Mata Sebenar (Actual)": f"{sq['actual_pts']} pts",
+                        "Perbezaan (+/-)": diff_badge
+                    })
+                st.dataframe(pd.DataFrame(leaderboard_data), use_container_width=True, hide_index=True)
+
+                st.markdown("---")
+                st.subheader("📋 Perincian Barisan Pemain Mengikut Skuad")
                 tabs = st.tabs([s["name"] for s in squads])
                 
                 for i, tab in enumerate(tabs):
@@ -474,37 +540,52 @@ else:
                     with tab:
                         c1, c2, c3, c4 = st.columns(4)
                         c1.metric("Formasi", sq["name"])
-                        c2.metric("Unjuran Mata FPL", f"{sq['projected_pts']} pts")
-                        c3.write(f"**Kapten [C]:** :green[{sq['C']}]")
-                        c4.write(f"**VC:** :blue[{sq['VC']}]")
+                        c2.metric("Unjuran (Proj)", f"{sq['projected_pts']} pts")
+                        c3.metric("Sebenar (Actual)", f"{sq['actual_pts']} pts", delta=f"{sq['diff_pts']} pts")
+                        c4.write(f"**Kapten [C]:** :green[{sq['C']}] | **VC:** :blue[{sq['VC']}]")
                         
                         st.write(f"**Disiplin Kelab:** {sq['clubs']}")
                         
                         c_xi, c_bench = st.columns([3, 2])
                         with c_xi:
-                            st.markdown("#### ⚽ Kesebelasan Utama (XI)")
-                            st.dataframe(pd.DataFrame([{
-                                "Pos": p["role"],
-                                "Pemain": p["name"],
-                                "Kelab": p["club"],
-                                "Set Piece": p["set_piece"],
-                                "Harga": p["price"],
-                                "FDR": p["fdr"],
-                                "xGI": p["xGI"],
-                                "Unjuran Mata FPL": p["fdr_score"]
-                            } for p in sq["xi"]]), use_container_width=True, hide_index=True)
+                            st.markdown("#### ⚽ Kesebelasan Utama (XI) - Analisis Prestasi")
+                            xi_table = []
+                            for p in sq["xi"]:
+                                act = get_player_actual(p["id"])
+                                is_c = (p["name"] == sq["C"])
+                                tag_c = " (C)" if is_c else ""
+                                p_proj = p["fdr_score"] * (2 if is_c else 1)
+                                p_act = act["actual_pts"] * (2 if is_c else 1)
+                                
+                                xi_table.append({
+                                    "Pos": p["role"],
+                                    "Pemain": f"{p['name']}{tag_c}",
+                                    "Kelab": p["club"],
+                                    "Minit": act["minutes"],
+                                    "Unjuran": round(p_proj, 1),
+                                    "Sebenar": p_act,
+                                    "Beza (+/-)": round(p_act - p_proj, 1),
+                                    "Gol": act["goals"],
+                                    "Assist": act["assists"],
+                                    "Set Piece": p["set_piece"]
+                                })
+                            st.dataframe(pd.DataFrame(xi_table), use_container_width=True, hide_index=True)
                             
                         with c_bench:
                             st.markdown("#### 🪑 Bangku Simpanan")
-                            st.dataframe(pd.DataFrame([{
-                                "Turutan": f"Sub {idx}" if idx > 0 else "Sub GKP",
-                                "Pos": p["role"],
-                                "Pemain": p["name"],
-                                "Kelab": p["club"],
-                                "Set Piece": p["set_piece"],
-                                "FDR": p["fdr"],
-                                "xGI": p["xGI"]
-                            } for idx, p in enumerate(sq["bench"])]), use_container_width=True, hide_index=True)
+                            bench_table = []
+                            for idx, p in enumerate(sq["bench"]):
+                                act = get_player_actual(p["id"])
+                                bench_table.append({
+                                    "Sub": f"Sub {idx}" if idx > 0 else "Sub GKP",
+                                    "Pos": p["role"],
+                                    "Pemain": p["name"],
+                                    "Kelab": p["club"],
+                                    "Minit": act["minutes"],
+                                    "Sebenar": act["actual_pts"],
+                                    "Unjuran": p["fdr_score"]
+                                })
+                            st.dataframe(pd.DataFrame(bench_table), use_container_width=True, hide_index=True)
 
                 st.markdown("---")
                 st.subheader("📊 Audit Siling Monopoli Aset (Maksimum 3 Kemunculan / ≤ 43%)")
