@@ -42,8 +42,8 @@ else:
     # ==========================================================
     ODDS_API_KEY = "4c5a97480b5a82fa022dd02e9833d8e7"
 
-    st.title("🏆 Enjin Portfolio 7 Skuad Juara FPL MFF (SOP v5.7)")
-    st.caption("Automasi Penuh: Kawalan PIN, Custom Match Selector, Live API, Auto-FDR & Auto-Odds")
+    st.title("🏆 Enjin Portfolio 7 Skuad Juara FPL MFF (SOP v5.8 - In-Form Boost)")
+    st.caption("Automasi Penuh: Kawalan PIN, Custom Match Selector, Live API, Auto-FDR, Auto-Odds & In-Form Weighting")
 
     @st.cache_data(ttl=1800)
     def fetch_fpl_api(endpoint):
@@ -87,6 +87,11 @@ else:
         except Exception:
             xgi = 0.0
 
+        try:
+            form_val = float(p.get("form", 0) or 0)
+        except Exception:
+            form_val = 0.0
+
         sp_tags = []
         if p.get("penalties_order") == 1:
             sp_tags.append("🎯 PK")
@@ -109,6 +114,7 @@ else:
             "role": role_map.get(p["element_type"], "MID"),
             "min": int(p.get("minutes", 0)),
             "xGI": round(xgi, 2),
+            "form": form_val,  # Indikator prestasi semasa (In-Form)
             "set_piece": sp_label,
             "is_pk": p.get("penalties_order") == 1,
             "is_fk": p.get("direct_freekicks_order") == 1,
@@ -269,7 +275,8 @@ else:
             if p["role"] in ["DEF", "GKP"] and fdr >= 4:
                 fdr_multiplier *= 0.5
                 
-            base_score = p["xGI"] * fdr_multiplier
+            # Asas xGI darab FDR multiplier + In-Form Boost (faktor prestasi semasa)
+            base_score = (p["xGI"] * fdr_multiplier) + (p["form"] * 0.08)
             
             sp_bonus = 0.0
             if p.get("is_pk"):
@@ -304,7 +311,7 @@ else:
             eligible_players[p_name] = p_data
 
         odds_badge = "🟢 Auto-Odds Aktif" if odds_data else "🟡 Odds Asas Digunakan"
-        st.info(f"🟢 **Status ({gw_name}):** Mengunci **{len(matches)} perlawanan** | **{len(eligible_players)} pemain layak** | {odds_badge}")
+        st.info(f"🟢 **Status ({gw_name}):** Mengunci **{len(matches)} perlawanan** | **{len(eligible_players)} pemain layak (In-Form Boost Aktif)** | {odds_badge}")
 
         BLUEPRINTS = [
             {"name": "Skuad 1 (5-3-2)", "formation": "5-3-2", "xi": {"GKP": 1, "DEF": 5, "MID": 3, "FWD": 2}},
