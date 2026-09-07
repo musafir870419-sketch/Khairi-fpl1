@@ -42,8 +42,8 @@ else:
     # ==========================================================
     ODDS_API_KEY = "4c5a97480b5a82fa022dd02e9833d8e7"
 
-    st.title("🏆 Enjin Portfolio 7 Skuad Juara FPL MFF (SOP v6.2 - Tactical Formations)")
-    st.caption("Automasi Penuh: Variasi Formasi Taktikal Moden, Unjuran Mata FPL Rasmi & Kapten Unik")
+    st.title("🏆 Enjin Portfolio 7 Skuad Juara FPL MFF (SOP v6.3 - Dynamic Scoring & End-to-End Fix)")
+    st.caption("Automasi Penuh: Taktikal Fleksibel, Sokongan Bek Menyerang & Underdog, Unjuran Mata FPL Rasmi")
 
     @st.cache_data(ttl=1800)
     def fetch_fpl_api(endpoint):
@@ -164,7 +164,7 @@ else:
         for ev in odds_data:
             ev_h = normalize_team(ev.get("home_team", ""))
             ev_a = normalize_team(ev.get("away_team", ""))
-            if (h_norm in ev_h or ev_h in h_norm) and (a_norm in ev_a or ev_a in h_norm):
+            if (h_norm in ev_h or ev_h in h_norm) and (a_norm in ev_a or ev_a in a_norm):
                 bookmakers = ev.get("bookmakers", [])
                 if bookmakers:
                     bm = bookmakers[0]
@@ -262,14 +262,20 @@ else:
             club_fdr[h] = m["fdr_h"]
             club_fdr[a] = m["fdr_a"]
             
-            is_giant_home = (m["odds_1"] <= 1.60)
-            is_giant_away = (m["odds_2"] <= 1.60)
-            btts_extreme = (m["btts_yes"] < 1.60)
+            is_giant_home = (m["odds_1"] <= 1.50)
+            is_giant_away = (m["odds_2"] <= 1.50)
+            btts_extreme = (m["btts_yes"] < 1.65)
             
             underdog = a if is_giant_home else (h if is_giant_away else None)
-            match_rules[m["id"]] = {"underdog": underdog, "all_attack": btts_extreme}
+            match_rules[m["id"]] = {
+                "underdog": underdog, 
+                "all_attack": btts_extreme,
+                "btts_val": m["btts_yes"],
+                "over_25_val": m["over_25"]
+            }
 
-        def calculate_official_fpl_points(p, club_match):
+        # Formula Pengiraan Mata Rasmi FPL Fleksibel (Gol, Assist, Clean Sheet, Saves)
+        def calculate_official_fpl_points(p, m_rule):
             role = p["role"]
             xgi = p["xGI"]
             form = p["form"]
@@ -280,12 +286,15 @@ else:
             
             est_goals = xgi * 0.45
             est_assists = xgi * 0.55
-            
             pts_attacking = (est_goals * goal_multiplier) + (est_assists * assist_multiplier)
             
             fdr = club_fdr.get(p["club"], 3)
-            clean_sheet_prob = max(0.1, (6 - fdr) / 5.0)
+            clean_sheet_prob = max(0.05, (6 - fdr) / 5.0)
             
+            # Jika perlawanan terbuka / ramalan banyak gol, rendahkan kebarangkalian clean sheet
+            if m_rule and (m_rule["all_attack"] or m_rule["over_25_val"] < 1.75):
+                clean_sheet_prob *= 0.35
+                
             pts_clean_sheet = 0.0
             if role in ["GKP", "DEF"]:
                 pts_clean_sheet = clean_sheet_prob * 4.0
@@ -317,20 +326,29 @@ else:
                 continue
                 
             r = match_rules[m_info["id"]]
+            
+            # PENAPISAN DINAMIK TERBARU:
+            # 1. Jangan sekat penyerang/pemain tengah underdog (cth: Tavernier, Scott, Isidor)
+            # Hanya elakkan pertahanan underdog pasif yang tiada potensi menyerang (xGI < 0.10)
             if r["underdog"] and r["underdog"].lower() in p_club.lower():
-                continue
+                if p["role"] in ["GKP", "DEF"] and p["xGI"] < 0.10 and not (p.get("is_fk") or p.get("is_ck")):
+                    continue
+            
+            # 2. Bek menyerang / Wing-backs (cth: Mitchell, Bogle, Chilwell) tidak disingkirkan dalam perlawanan all-attack
             if r["all_attack"] and p["role"] in ["GKP", "DEF"]:
-                continue
+                if p["role"] == "GKP":
+                    pass # Benarkan GKP kekal untuk mata saves
+                elif p["xGI"] < 0.05 and not (p.get("is_fk") or p.get("is_ck")):
+                    continue # Hanya buang bek tengah pasif yang tiada potensi menyerang
                     
             p_data = dict(p)
             p_data["fdr"] = club_fdr.get(p_club, 3)
-            p_data["fdr_score"] = calculate_official_fpl_points(p, m_info)
+            p_data["fdr_score"] = calculate_official_fpl_points(p, r)
             eligible_players[p_name] = p_data
 
         odds_badge = "🟢 Auto-Odds Aktif" if odds_data else "🟡 Odds Asas Digunakan"
-        st.info(f"🟢 **Status ({gw_name}):** Mengunci **{len(matches)} perlawanan** | **{len(eligible_players)} pemain layak (Tactical Formations Model)** | {odds_badge}")
+        st.info(f"🟢 **Status ({gw_name}):** Mengunci **{len(matches)} perlawanan** | **{len(eligible_players)} pemain layak (Logik Dinamik Aktif)** | {odds_badge}")
 
-        # Integrasi Variasi Formasi Bola Sepak Moden (Menyerang, Bertahan, Penguasaan Tengah)
         BLUEPRINTS = [
             {"name": "Skuad 1 (4-3-3 Attacking / 4-2-1-3)", "formation": "4-3-3", "xi": {"GKP": 1, "DEF": 4, "MID": 3, "FWD": 3}},
             {"name": "Skuad 2 (3-4-3 Wing-Backs Attack)", "formation": "3-4-3", "xi": {"GKP": 1, "DEF": 3, "MID": 4, "FWD": 3}},
