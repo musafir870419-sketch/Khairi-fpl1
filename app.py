@@ -42,8 +42,8 @@ else:
     # ==========================================================
     ODDS_API_KEY = "4c5a97480b5a82fa022dd02e9833d8e7"
 
-    st.title("🏆 Enjin Portfolio 7 Skuad Juara FPL MFF (SOP v5.8 - In-Form Boost)")
-    st.caption("Automasi Penuh: Kawalan PIN, Custom Match Selector, Live API, Auto-FDR, Auto-Odds & In-Form Weighting")
+    st.title("🏆 Enjin Portfolio 7 Skuad Juara FPL MFF (SOP v6.0 - Projected Points & Multi-Formations)")
+    st.caption("Automasi Penuh: Kawalan PIN, Kapten Unik, Jangkaan Mata Skuad, Variasi Formasi & In-Form Boost")
 
     @st.cache_data(ttl=1800)
     def fetch_fpl_api(endpoint):
@@ -114,7 +114,7 @@ else:
             "role": role_map.get(p["element_type"], "MID"),
             "min": int(p.get("minutes", 0)),
             "xGI": round(xgi, 2),
-            "form": form_val,  # Indikator prestasi semasa (In-Form)
+            "form": form_val,
             "set_piece": sp_label,
             "is_pk": p.get("penalties_order") == 1,
             "is_fk": p.get("direct_freekicks_order") == 1,
@@ -275,7 +275,6 @@ else:
             if p["role"] in ["DEF", "GKP"] and fdr >= 4:
                 fdr_multiplier *= 0.5
                 
-            # Asas xGI darab FDR multiplier + In-Form Boost (faktor prestasi semasa)
             base_score = (p["xGI"] * fdr_multiplier) + (p["form"] * 0.08)
             
             sp_bonus = 0.0
@@ -311,16 +310,17 @@ else:
             eligible_players[p_name] = p_data
 
         odds_badge = "🟢 Auto-Odds Aktif" if odds_data else "🟡 Odds Asas Digunakan"
-        st.info(f"🟢 **Status ({gw_name}):** Mengunci **{len(matches)} perlawanan** | **{len(eligible_players)} pemain layak (In-Form Boost Aktif)** | {odds_badge}")
+        st.info(f"🟢 **Status ({gw_name}):** Mengunci **{len(matches)} perlawanan** | **{len(eligible_players)} pemain layak (Projected Points & Multi-Formations)** | {odds_badge}")
 
+        # Variasi formasi luas merangkumi pelbagai corak taktikal menyerang dan bertahan
         BLUEPRINTS = [
-            {"name": "Skuad 1 (5-3-2)", "formation": "5-3-2", "xi": {"GKP": 1, "DEF": 5, "MID": 3, "FWD": 2}},
-            {"name": "Skuad 2 (4-4-2)", "formation": "4-4-2", "xi": {"GKP": 1, "DEF": 4, "MID": 4, "FWD": 2}},
-            {"name": "Skuad 3 (4-5-1)", "formation": "4-5-1", "xi": {"GKP": 1, "DEF": 4, "MID": 5, "FWD": 1}},
-            {"name": "Skuad 4 (3-4-3)", "formation": "3-4-3", "xi": {"GKP": 1, "DEF": 3, "MID": 4, "FWD": 3}},
-            {"name": "Skuad 5 (3-5-2)", "formation": "3-5-2", "xi": {"GKP": 1, "DEF": 3, "MID": 5, "FWD": 2}},
-            {"name": "Skuad 6 (4-3-3)", "formation": "4-3-3", "xi": {"GKP": 1, "DEF": 4, "MID": 3, "FWD": 3}},
-            {"name": "Skuad 7 (5-4-1)", "formation": "5-4-1", "xi": {"GKP": 1, "DEF": 5, "MID": 4, "FWD": 1}}
+            {"name": "Skuad 1 (3-4-3 Elit)", "formation": "3-4-3", "xi": {"GKP": 1, "DEF": 3, "MID": 4, "FWD": 3}},
+            {"name": "Skuad 2 (3-5-2 Midfield Heavy)", "formation": "3-5-2", "xi": {"GKP": 1, "DEF": 3, "MID": 5, "FWD": 2}},
+            {"name": "Skuad 3 (4-3-3 Balanced)", "formation": "4-3-3", "xi": {"GKP": 1, "DEF": 4, "MID": 3, "FWD": 3}},
+            {"name": "Skuad 4 (4-4-2 Classic)", "formation": "4-4-2", "xi": {"GKP": 1, "DEF": 4, "MID": 4, "FWD": 2}},
+            {"name": "Skuad 5 (4-5-1 Control)", "formation": "4-5-1", "xi": {"GKP": 1, "DEF": 4, "MID": 5, "FWD": 1}},
+            {"name": "Skuad 6 (5-3-2 Defensive Wall)", "formation": "5-3-2", "xi": {"GKP": 1, "DEF": 5, "MID": 3, "FWD": 2}},
+            {"name": "Skuad 7 (5-4-1 Counter)", "formation": "5-4-1", "xi": {"GKP": 1, "DEF": 5, "MID": 4, "FWD": 1}}
         ]
 
         def get_match_id(club):
@@ -332,6 +332,7 @@ else:
         def build_portfolio():
             global_counts = Counter()
             squads = []
+            used_captains = set()
             
             sorted_pool = sorted(
                 eligible_players.values(),
@@ -347,9 +348,16 @@ else:
                 
                 cap_candidates = [
                     p for p in sorted_pool 
-                    if global_counts[p["name"]] < 3 and p["fdr"] <= 3 and p["role"] in ["MID", "FWD"]
+                    if global_counts[p["name"]] < 3 and p["fdr"] <= 3 and p["role"] in ["MID", "FWD"] and p["name"] not in used_captains
                 ]
-                cap = cap_candidates[0] if cap_candidates else sorted_pool[0]
+                
+                if cap_candidates:
+                    cap = cap_candidates[0]
+                else:
+                    fallback_cands = [p for p in sorted_pool if p["role"] in ["MID", "FWD"] and p["name"] not in used_captains]
+                    cap = fallback_cands[0] if fallback_cands else sorted_pool[0]
+                
+                used_captains.add(cap["name"])
                 selected.append(cap)
                 club_counts[cap["club"]] += 1
                 role_counts[cap["role"]] += 1
@@ -399,6 +407,9 @@ else:
                 bench_g = [p for p in bench if p["role"] == "GKP"]
                 bench_out = sorted([p for p in bench if p["role"] != "GKP"], key=lambda x: x["fdr_score"], reverse=True)
                 
+                # Kiraan Jangkaan Mata Skuad (Projected Points) untuk Kesebelasan Utama (XI) + Kapten (2x mata)
+                projected_pts = sum([p["fdr_score"] for p in xi]) + cap["fdr_score"]
+                
                 for p in selected:
                     global_counts[p["name"]] += 1
                     
@@ -407,6 +418,7 @@ else:
                     "formation": bp["formation"],
                     "C": cap["name"] if cap else "-",
                     "VC": vc["name"] if vc else "-",
+                    "projected_pts": round(projected_pts, 1),
                     "xi": xi,
                     "bench": bench_g + bench_out,
                     "clubs": dict(club_counts)
@@ -425,10 +437,13 @@ else:
                 for i, tab in enumerate(tabs):
                     sq = squads[i]
                     with tab:
-                        c1, c2, c3 = st.columns(3)
+                        c1, c2, c3, c4 = st.columns(4)
                         c1.metric("Formasi", sq["formation"])
-                        c2.write(f"**Kapten [C]:** :green[{sq['C']}] | **VC:** :blue[{sq['VC']}]")
-                        c3.write(f"**Disiplin Kelab:** {sq['clubs']}")
+                        c2.metric("Jangkaan Mata (Proj. Pts)", f"{sq['projected_pts']} pts")
+                        c3.write(f"**Kapten [C]:** :green[{sq['C']}]")
+                        c4.write(f"**VC:** :blue[{sq['VC']}]")
+                        
+                        st.write(f"**Disiplin Kelab:** {sq['clubs']}")
                         
                         c_xi, c_bench = st.columns([3, 2])
                         with c_xi:
