@@ -42,8 +42,8 @@ else:
     # ==========================================================
     ODDS_API_KEY = "4c5a97480b5a82fa022dd02e9833d8e7"
 
-    st.title("🏆 Enjin Portfolio 7 Skuad Juara FPL MFF (SOP v6.1 - Official FPL Scoring Model)")
-    st.caption("Automasi Penuh: Unjuran Mata Rasmi FPL (Gol, Assist, Clean Sheet, Saves) & Multi-Formations")
+    st.title("🏆 Enjin Portfolio 7 Skuad Juara FPL MFF (SOP v6.2 - Tactical Formations)")
+    st.caption("Automasi Penuh: Variasi Formasi Taktikal Moden, Unjuran Mata FPL Rasmi & Kapten Unik")
 
     @st.cache_data(ttl=1800)
     def fetch_fpl_api(endpoint):
@@ -269,28 +269,20 @@ else:
             underdog = a if is_giant_home else (h if is_giant_away else None)
             match_rules[m["id"]] = {"underdog": underdog, "all_attack": btts_extreme}
 
-        # Formula Pengiraan Mata Rasmi FPL (Gol, Assist, Clean Sheet, Saves, Appearance)
         def calculate_official_fpl_points(p, club_match):
             role = p["role"]
             xgi = p["xGI"]
             form = p["form"]
             
-            # Unjuran minit / appearance (2 mata jika bermain > 60 minit)
             pts_appearance = 2.0 
-            
-            # Unjuran Gol & Assist berasaskan struktur mata FPL rasmi:
-            # GKP/DEF: 6 mata seunit gol | MID: 5 mata seunit gol | FWD: 4 mata seunit gol
-            # Semua posisi: 3 mata seunit assist
             goal_multiplier = 6 if role in ["GKP", "DEF"] else (5 if role == "MID" else 4)
             assist_multiplier = 3.0
             
-            # Pecahkan xGI kepada anggaran unjuran gol dan assist secara nisbah unjuran
             est_goals = xgi * 0.45
             est_assists = xgi * 0.55
             
             pts_attacking = (est_goals * goal_multiplier) + (est_assists * assist_multiplier)
             
-            # Unjuran Clean Sheet (GKP & DEF = +4 mata, MID = +1 mata) jika FDR rendah / pasukan kuat
             fdr = club_fdr.get(p["club"], 3)
             clean_sheet_prob = max(0.1, (6 - fdr) / 5.0)
             
@@ -300,17 +292,14 @@ else:
             elif role == "MID":
                 pts_clean_sheet = clean_sheet_prob * 1.0
                 
-            # Unjuran Saves (GKP): Setiap 3 saves = +1 mata (anggaran purata 3 saves per perlawanan untuk GKP)
             pts_saves = 1.0 if role == "GKP" else 0.0
             
-            # Bonus Penalti / Set Piece
             sp_bonus = 0.0
             if p.get("is_pk"):
                 sp_bonus += 1.5
             if p.get("is_fk") or p.get("is_ck"):
                 sp_bonus += 0.5
                 
-            # Faktor prestasi semasa (In-form boost)
             form_bonus = form * 0.2
             
             total_projected_fpl_pts = pts_appearance + pts_attacking + pts_clean_sheet + pts_saves + sp_bonus + form_bonus
@@ -339,16 +328,17 @@ else:
             eligible_players[p_name] = p_data
 
         odds_badge = "🟢 Auto-Odds Aktif" if odds_data else "🟡 Odds Asas Digunakan"
-        st.info(f"🟢 **Status ({gw_name}):** Mengunci **{len(matches)} perlawanan** | **{len(eligible_players)} pemain layak (Official FPL Points Model)** | {odds_badge}")
+        st.info(f"🟢 **Status ({gw_name}):** Mengunci **{len(matches)} perlawanan** | **{len(eligible_players)} pemain layak (Tactical Formations Model)** | {odds_badge}")
 
+        # Integrasi Variasi Formasi Bola Sepak Moden (Menyerang, Bertahan, Penguasaan Tengah)
         BLUEPRINTS = [
-            {"name": "Skuad 1 (3-4-3 Elit)", "formation": "3-4-3", "xi": {"GKP": 1, "DEF": 3, "MID": 4, "FWD": 3}},
-            {"name": "Skuad 2 (3-5-2 Midfield Heavy)", "formation": "3-5-2", "xi": {"GKP": 1, "DEF": 3, "MID": 5, "FWD": 2}},
-            {"name": "Skuad 3 (4-3-3 Balanced)", "formation": "4-3-3", "xi": {"GKP": 1, "DEF": 4, "MID": 3, "FWD": 3}},
-            {"name": "Skuad 4 (4-4-2 Classic)", "formation": "4-4-2", "xi": {"GKP": 1, "DEF": 4, "MID": 4, "FWD": 2}},
-            {"name": "Skuad 5 (4-5-1 Control)", "formation": "4-5-1", "xi": {"GKP": 1, "DEF": 4, "MID": 5, "FWD": 1}},
-            {"name": "Skuad 6 (5-3-2 Defensive Wall)", "formation": "5-3-2", "xi": {"GKP": 1, "DEF": 5, "MID": 3, "FWD": 2}},
-            {"name": "Skuad 7 (5-4-1 Counter)", "formation": "5-4-1", "xi": {"GKP": 1, "DEF": 5, "MID": 4, "FWD": 1}}
+            {"name": "Skuad 1 (4-3-3 Attacking / 4-2-1-3)", "formation": "4-3-3", "xi": {"GKP": 1, "DEF": 4, "MID": 3, "FWD": 3}},
+            {"name": "Skuad 2 (3-4-3 Wing-Backs Attack)", "formation": "3-4-3", "xi": {"GKP": 1, "DEF": 3, "MID": 4, "FWD": 3}},
+            {"name": "Skuad 3 (4-1-2-3 Heavy Attack)", "formation": "4-3-3", "xi": {"GKP": 1, "DEF": 4, "MID": 3, "FWD": 3}},
+            {"name": "Skuad 4 (4-2-3-1 Modern Possession)", "formation": "4-2-3-1", "xi": {"GKP": 1, "DEF": 4, "MID": 5, "FWD": 1}},
+            {"name": "Skuad 5 (3-5-2 Midfield Control)", "formation": "3-5-2", "xi": {"GKP": 1, "DEF": 3, "MID": 5, "FWD": 2}},
+            {"name": "Skuad 6 (4-5-1 Defensive Solid)", "formation": "4-5-1", "xi": {"GKP": 1, "DEF": 4, "MID": 5, "FWD": 1}},
+            {"name": "Skuad 7 (5-4-1 Low Block Counter)", "formation": "5-4-1", "xi": {"GKP": 1, "DEF": 5, "MID": 4, "FWD": 1}}
         ]
 
         def get_match_id(club):
@@ -435,7 +425,6 @@ else:
                 bench_g = [p for p in bench if p["role"] == "GKP"]
                 bench_out = sorted([p for p in bench if p["role"] != "GKP"], key=lambda x: x["fdr_score"], reverse=True)
                 
-                # Jumlah mata FPL rasmi XI + Pengganda Kapten (2x mata kapten)
                 total_xi_pts = sum([p["fdr_score"] for p in xi]) + cap["fdr_score"]
                 
                 for p in selected:
@@ -466,7 +455,7 @@ else:
                     sq = squads[i]
                     with tab:
                         c1, c2, c3, c4 = st.columns(4)
-                        c1.metric("Formasi", sq["formation"])
+                        c1.metric("Formasi", sq["name"])
                         c2.metric("Unjuran Mata FPL", f"{sq['projected_pts']} pts")
                         c3.write(f"**Kapten [C]:** :green[{sq['C']}]")
                         c4.write(f"**VC:** :blue[{sq['VC']}]")
