@@ -474,7 +474,6 @@ else:
                 cap_act = get_player_actual(cap["id"])
                 vc_act = get_player_actual(vc["id"]) if vc else {"actual_pts": 0, "minutes": 0}
                 
-                # Kapten 2x mata (jika kapten tak main, VC ambil alih)
                 total_act_pts = 0
                 for p in xi:
                     act_p = get_player_actual(p["id"])
