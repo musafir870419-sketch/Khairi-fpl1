@@ -42,8 +42,8 @@ else:
     # ==========================================================
     ODDS_API_KEY = "4c5a97480b5a82fa022dd02e9833d8e7"
 
-    st.title("🏆 Enjin Portfolio 7 Skuad Juara FPL MFF (SOP v6.0 - Projected Points & Multi-Formations)")
-    st.caption("Automasi Penuh: Kawalan PIN, Kapten Unik, Jangkaan Mata Skuad, Variasi Formasi & In-Form Boost")
+    st.title("🏆 Enjin Portfolio 7 Skuad Juara FPL MFF (SOP v6.1 - Official FPL Scoring Model)")
+    st.caption("Automasi Penuh: Unjuran Mata Rasmi FPL (Gol, Assist, Clean Sheet, Saves) & Multi-Formations")
 
     @st.cache_data(ttl=1800)
     def fetch_fpl_api(endpoint):
@@ -112,6 +112,7 @@ else:
             "full_name": f"{p['first_name']} {p['second_name']}",
             "club": team_map.get(p["team"], "Unknown"),
             "role": role_map.get(p["element_type"], "MID"),
+            "element_type": p["element_type"],
             "min": int(p.get("minutes", 0)),
             "xGI": round(xgi, 2),
             "form": form_val,
@@ -163,7 +164,7 @@ else:
         for ev in odds_data:
             ev_h = normalize_team(ev.get("home_team", ""))
             ev_a = normalize_team(ev.get("away_team", ""))
-            if (h_norm in ev_h or ev_h in h_norm) and (a_norm in ev_a or ev_a in a_norm):
+            if (h_norm in ev_h or ev_h in h_norm) and (a_norm in ev_a or ev_a in h_norm):
                 bookmakers = ev.get("bookmakers", [])
                 if bookmakers:
                     bm = bookmakers[0]
@@ -268,24 +269,52 @@ else:
             underdog = a if is_giant_home else (h if is_giant_away else None)
             match_rules[m["id"]] = {"underdog": underdog, "all_attack": btts_extreme}
 
-        def calculate_fdr_score(p):
+        # Formula Pengiraan Mata Rasmi FPL (Gol, Assist, Clean Sheet, Saves, Appearance)
+        def calculate_official_fpl_points(p, club_match):
+            role = p["role"]
+            xgi = p["xGI"]
+            form = p["form"]
+            
+            # Unjuran minit / appearance (2 mata jika bermain > 60 minit)
+            pts_appearance = 2.0 
+            
+            # Unjuran Gol & Assist berasaskan struktur mata FPL rasmi:
+            # GKP/DEF: 6 mata seunit gol | MID: 5 mata seunit gol | FWD: 4 mata seunit gol
+            # Semua posisi: 3 mata seunit assist
+            goal_multiplier = 6 if role in ["GKP", "DEF"] else (5 if role == "MID" else 4)
+            assist_multiplier = 3.0
+            
+            # Pecahkan xGI kepada anggaran unjuran gol dan assist secara nisbah unjuran
+            est_goals = xgi * 0.45
+            est_assists = xgi * 0.55
+            
+            pts_attacking = (est_goals * goal_multiplier) + (est_assists * assist_multiplier)
+            
+            # Unjuran Clean Sheet (GKP & DEF = +4 mata, MID = +1 mata) jika FDR rendah / pasukan kuat
             fdr = club_fdr.get(p["club"], 3)
-            fdr_multiplier = (6 - fdr) / 3.0
+            clean_sheet_prob = max(0.1, (6 - fdr) / 5.0)
             
-            if p["role"] in ["DEF", "GKP"] and fdr >= 4:
-                fdr_multiplier *= 0.5
+            pts_clean_sheet = 0.0
+            if role in ["GKP", "DEF"]:
+                pts_clean_sheet = clean_sheet_prob * 4.0
+            elif role == "MID":
+                pts_clean_sheet = clean_sheet_prob * 1.0
                 
-            base_score = (p["xGI"] * fdr_multiplier) + (p["form"] * 0.08)
+            # Unjuran Saves (GKP): Setiap 3 saves = +1 mata (anggaran purata 3 saves per perlawanan untuk GKP)
+            pts_saves = 1.0 if role == "GKP" else 0.0
             
+            # Bonus Penalti / Set Piece
             sp_bonus = 0.0
             if p.get("is_pk"):
-                sp_bonus += 0.35
-            if p.get("is_fk"):
-                sp_bonus += 0.10
-            if p.get("is_ck"):
-                sp_bonus += 0.10
+                sp_bonus += 1.5
+            if p.get("is_fk") or p.get("is_ck"):
+                sp_bonus += 0.5
                 
-            return round(base_score + sp_bonus, 3)
+            # Faktor prestasi semasa (In-form boost)
+            form_bonus = form * 0.2
+            
+            total_projected_fpl_pts = pts_appearance + pts_attacking + pts_clean_sheet + pts_saves + sp_bonus + form_bonus
+            return round(max(1.0, total_projected_fpl_pts), 2)
 
         eligible_players = {}
         for p_name, p in all_players.items():
@@ -306,13 +335,12 @@ else:
                     
             p_data = dict(p)
             p_data["fdr"] = club_fdr.get(p_club, 3)
-            p_data["fdr_score"] = calculate_fdr_score(p)
+            p_data["fdr_score"] = calculate_official_fpl_points(p, m_info)
             eligible_players[p_name] = p_data
 
         odds_badge = "🟢 Auto-Odds Aktif" if odds_data else "🟡 Odds Asas Digunakan"
-        st.info(f"🟢 **Status ({gw_name}):** Mengunci **{len(matches)} perlawanan** | **{len(eligible_players)} pemain layak (Projected Points & Multi-Formations)** | {odds_badge}")
+        st.info(f"🟢 **Status ({gw_name}):** Mengunci **{len(matches)} perlawanan** | **{len(eligible_players)} pemain layak (Official FPL Points Model)** | {odds_badge}")
 
-        # Variasi formasi luas merangkumi pelbagai corak taktikal menyerang dan bertahan
         BLUEPRINTS = [
             {"name": "Skuad 1 (3-4-3 Elit)", "formation": "3-4-3", "xi": {"GKP": 1, "DEF": 3, "MID": 4, "FWD": 3}},
             {"name": "Skuad 2 (3-5-2 Midfield Heavy)", "formation": "3-5-2", "xi": {"GKP": 1, "DEF": 3, "MID": 5, "FWD": 2}},
@@ -407,8 +435,8 @@ else:
                 bench_g = [p for p in bench if p["role"] == "GKP"]
                 bench_out = sorted([p for p in bench if p["role"] != "GKP"], key=lambda x: x["fdr_score"], reverse=True)
                 
-                # Kiraan Jangkaan Mata Skuad (Projected Points) untuk Kesebelasan Utama (XI) + Kapten (2x mata)
-                projected_pts = sum([p["fdr_score"] for p in xi]) + cap["fdr_score"]
+                # Jumlah mata FPL rasmi XI + Pengganda Kapten (2x mata kapten)
+                total_xi_pts = sum([p["fdr_score"] for p in xi]) + cap["fdr_score"]
                 
                 for p in selected:
                     global_counts[p["name"]] += 1
@@ -418,7 +446,7 @@ else:
                     "formation": bp["formation"],
                     "C": cap["name"] if cap else "-",
                     "VC": vc["name"] if vc else "-",
-                    "projected_pts": round(projected_pts, 1),
+                    "projected_pts": round(total_xi_pts, 1),
                     "xi": xi,
                     "bench": bench_g + bench_out,
                     "clubs": dict(club_counts)
@@ -439,7 +467,7 @@ else:
                     with tab:
                         c1, c2, c3, c4 = st.columns(4)
                         c1.metric("Formasi", sq["formation"])
-                        c2.metric("Jangkaan Mata (Proj. Pts)", f"{sq['projected_pts']} pts")
+                        c2.metric("Unjuran Mata FPL", f"{sq['projected_pts']} pts")
                         c3.write(f"**Kapten [C]:** :green[{sq['C']}]")
                         c4.write(f"**VC:** :blue[{sq['VC']}]")
                         
@@ -456,7 +484,7 @@ else:
                                 "Harga": p["price"],
                                 "FDR": p["fdr"],
                                 "xGI": p["xGI"],
-                                "Skor Akhir": p["fdr_score"]
+                                "Unjuran Mata FPL": p["fdr_score"]
                             } for p in sq["xi"]]), use_container_width=True, hide_index=True)
                             
                         with c_bench:
