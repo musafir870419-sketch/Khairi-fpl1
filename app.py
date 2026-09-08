@@ -472,4 +472,4 @@ else:
                     selected.append(p)
                     club_counts[p["club"]] += 1
                     role_counts[p["role"]] += 1
-             
+            
