@@ -153,7 +153,7 @@ else:
     def fetch_live_odds(api_key):
         if not api_key:
             return []
-        url = f"https://api.the-odds-api.com/v4/sports/soccer_epl/odds/?apiKey={api_key}®ions=uk,eu&markets=h2h,totals&oddsFormat=decimal"
+        url = f"https://api.the-odds-api.com/v4/sports/soccer_epl/odds/?apiKey={api_key}&regions=uk,eu&markets=h2h,totals&oddsFormat=decimal"
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         try:
             with urllib.request.urlopen(req) as response:
