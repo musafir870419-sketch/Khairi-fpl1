@@ -1,475 +1,382 @@
 import streamlit as st
+import requests
 import pandas as pd
 from collections import Counter
-import urllib.request
-import json
 
-st.set_page_config(page_title="Sistem Portfolio FPL MFF", layout="wide")
+st.set_page_config(
+    page_title="Portfolio Generator FPL v6.4",
+    page_icon="⚽",
+    layout="wide"
+)
 
-# ==========================================================
-# 0. KESELAMATAN: SOROKKAN MENU & FOOTER STREAMLIT
-# ==========================================================
-st.markdown("""
-<style>
-#MainMenu {visibility: hidden;}
-footer {visibility: hidden;}
-.stAppDeployButton {display:none;}
-</style>
-""", unsafe_allow_html=True)
+# ==========================================
+# 1. KESELAMATAN & PENGESAHAN PIN
+# ==========================================
+CORRECT_PIN = "1994"  # Tukar PIN anda di sini jika perlu
 
-# ==========================================================
-# KESELAMATAN: PENGESAHAN PIN
-# ==========================================================
-PIN_RAHSIA = "870419"
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
 
-if "auth_ok" not in st.session_state:
-    st.session_state["auth_ok"] = False
-
-if not st.session_state["auth_ok"]:
-    st.title("🔒 Akses Terhad")
-    st.info("Sistem Analisis Strategi FPL MFF (Akses Peribadi)")
-    
-    user_pin = st.text_input("Masukkan PIN Keselamatan:", type="password")
-    if st.button("Buka Kunci Sistem", type="primary"):
-        if user_pin == PIN_RAHSIA:
-            st.session_state["auth_ok"] = True
+if not st.session_state.authenticated:
+    st.title("🔒 Kawalan Keselamatan FPL Portfolio")
+    pin_input = st.text_input("Masukkan PIN Keselamatan:", type="password")
+    if st.button("Masuk"):
+        if pin_input == CORRECT_PIN:
+            st.session_state.authenticated = True
             st.rerun()
         else:
-            st.error("PIN Tidak Sah!")
+            st.error("PIN salah. Sila cuba lagi.")
+    st.stop()
+
+# ==========================================
+# 2. FUNGSI AMBIL DATA (API & CACHE)
+# ==========================================
+ODDS_API_KEY = "4c5a97480b5a82fa022dd02e"  # Kunci The Odds API anda
+
+@st.cache_data(ttl=3600)
+def get_fpl_bootstrap():
+    url = "https://fantasy.premierleague.com/api/bootstrap-static/"
+    res = requests.get(url, timeout=10)
+    if res.status_code == 200:
+        return res.json()
+    return None
+
+@st.cache_data(ttl=3600)
+def get_fpl_fixtures():
+    url = "https://fantasy.premierleague.com/api/fixtures/"
+    res = requests.get(url, timeout=10)
+    if res.status_code == 200:
+        return res.json()
+    return None
+
+@st.cache_data(ttl=120)
+def get_fpl_live(gw):
+    url = f"https://fantasy.premierleague.com/api/event/{gw}/live/"
+    res = requests.get(url, timeout=10)
+    if res.status_code == 200:
+        return res.json()
+    return None
+
+@st.cache_data(ttl=21600)
+def get_odds_data(api_key):
+    if not api_key:
+        return []
+    url = f"https://api.the-odds-api.com/v4/sports/soccer_epl/odds/?apiKey={api_key}&regions=uk,eu&markets=h2h,totals"
+    try:
+        res = requests.get(url, timeout=10)
+        if res.status_code == 200:
+            return res.json()
+    except Exception:
+        pass
+    return []
+
+# Muat data asas
+bootstrap_data = get_fpl_bootstrap()
+fixtures_data = get_fpl_fixtures()
+
+if not bootstrap_data or not fixtures_data:
+    st.error("Gagal menyambung ke pelayan FPL API. Sila muat semula sebentar lagi.")
+    st.stop()
+
+# Kenal pasti Gameweek semasa / akan datang
+events = bootstrap_data.get("events", [])
+current_gw = next((e["id"] for e in events if e.get("is_next")), None)
+if not current_gw:
+    current_gw = next((e["id"] for e in events if e.get("is_current")), 1)
+
+# Ambil data mata sebenar (Live)
+live_data = get_fpl_live(current_gw)
+
+# Petakan Nama Pasukan
+teams_dict = {t["id"]: t["name"] for t in bootstrap_data.get("teams", [])}
+team_short_dict = {t["id"]: t["short_name"] for t in bootstrap_data.get("teams", [])}
+
+# Tapis Jadual GW Semasa
+gw_fixtures = [f for f in fixtures_data if f.get("event") == current_gw]
+
+# ==========================================
+# 3. MENU SISI (SIDEBAR CONTROLS)
+# ==========================================
+st.sidebar.header(f"⚙️ Tetapan Gameweek {current_gw}")
+
+if st.sidebar.button("🔄 Segarkan Data (Clear Cache)"):
+    st.cache_data.clear()
+    st.rerun()
+
+# Pilihan Pantas Perlawanan
+st.sidebar.subheader("Pilih Perlawanan")
+preset_options = ["Semua Perlawanan", "4 Perlawanan Terawal (Game 1-4)", "Pilihan Manual"]
+preset = st.sidebar.selectbox("Mod Pilihan Jadual:", preset_options)
+
+fixture_display_list = []
+fixture_map = {}
+for f in gw_fixtures:
+    h_team = teams_dict.get(f["team_h"], f"Team {f['team_h']}")
+    a_team = teams_dict.get(f["team_a"], f"Team {f['team_a']}")
+    label = f"{h_team} vs {a_team}"
+    fixture_display_list.append(label)
+    fixture_map[label] = f
+
+if preset == "Semua Perlawanan":
+    selected_labels = fixture_display_list
+elif preset == "4 Perlawanan Terawal (Game 1-4)":
+    selected_labels = fixture_display_list[:4]
 else:
-    # ==========================================================
-    # KANDUNGAN UTAMA SISTEM (HANYA DIBUKA JIKA PIN BETUL)
-    # ==========================================================
-    ODDS_API_KEY = "4c5a97480b5a82fa022dd02e9833d8e7"
+    selected_labels = st.sidebar.multiselect("Pilih Perlawanan:", fixture_display_list, default=fixture_display_list[:5])
 
-    st.title("🏆 Enjin Portfolio 7 Skuad Juara FPL MFF (SOP v6.4 - Actual vs Predicted Tracker)")
-    st.caption("Automasi Penuh: Perbandingan Mata Sebenar (Live API) vs Unjuran, Formasi Taktikal & Audit Skuad")
+selected_team_ids = set()
+for lbl in selected_labels:
+    f_obj = fixture_map[lbl]
+    selected_team_ids.add(f_obj["team_h"])
+    selected_team_ids.add(f_obj["team_a"])
 
-    @st.cache_data(ttl=1800)
-    def fetch_fpl_api(endpoint):
-        url = f"https://fantasy.premierleague.com/api/{endpoint}"
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        try:
-            with urllib.request.urlopen(req) as response:
-                return json.loads(response.read().decode())
-        except Exception:
-            return None
+# Senarai Hitam Pemain
+st.sidebar.subheader("🚫 Senarai Hitam (Blacklist)")
+blacklist_str = st.sidebar.text_input("Nama pemain (pisahkan dengan koma):", value="Mateta, Caicedo")
+blacklist = [name.strip().lower() for name in blacklist_str.split(",") if name.strip()]
 
-    @st.cache_data(ttl=120)
-    def fetch_fpl_live(gw_id):
-        url = f"https://fantasy.premierleague.com/api/event/{gw_id}/live/"
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        try:
-            with urllib.request.urlopen(req) as response:
-                return json.loads(response.read().decode())
-        except Exception:
-            return None
+# ==========================================
+# 4. PEMPROSESAN DATA PEMAIN & PRESTASI
+# ==========================================
+raw_players = bootstrap_data.get("elements", [])
+element_types = {1: "GKP", 2: "DEF", 3: "MID", 4: "FWD"}
 
-    fpl_raw = fetch_fpl_api("bootstrap-static/")
-    if not fpl_raw:
-        st.error("Gagal menyambung ke FPL API. Sila segarkan pelayar.")
-        st.stop()
+# Dapatkan data odds untuk penapis CS bolos
+odds_list = get_odds_data(ODDS_API_KEY)
 
-    next_event = next((e for e in fpl_raw["events"] if e.get("is_next")), None)
-    if not next_event:
-        next_event = next((e for e in fpl_raw["events"] if e.get("is_current")), fpl_raw["events"][0])
-
-    gw_id = next_event["id"]
-    gw_name = next_event["name"]
-
-    fixtures_raw = fetch_fpl_api(f"fixtures/?event={gw_id}")
-    if not fixtures_raw:
-        st.error("Gagal menarik data perlawanan.")
-        st.stop()
-
-    # Tarik data mata sebenar (Live Actual Points)
-    live_raw = fetch_fpl_live(gw_id)
-    actual_stats = {}
-    if live_raw and "elements" in live_raw:
-        for item in live_raw["elements"]:
-            pid = item["id"]
-            stats_dict = item.get("stats", {})
-            actual_stats[pid] = {
-                "actual_pts": stats_dict.get("total_points", 0),
-                "minutes": stats_dict.get("minutes", 0),
-                "goals": stats_dict.get("goals_scored", 0),
-                "assists": stats_dict.get("assists", 0),
-                "clean_sheets": stats_dict.get("clean_sheets", 0),
-                "bonus": stats_dict.get("bonus", 0)
-            }
-
-    team_map = {t["id"]: t["name"] for t in fpl_raw["teams"]}
-    role_map = {1: "GKP", 2: "DEF", 3: "MID", 4: "FWD"}
-
-    all_players = {}
-    for p in fpl_raw["elements"]:
-        chance = p.get("chance_of_playing_next_round")
-        status = p.get("status")
-        if chance == 0 or status in ['i', 's', 'u']:
-            continue
-            
-        try:
-            xgi = float(p.get("expected_goal_involvements", 0) or 0)
-        except Exception:
-            xgi = 0.0
-
-        try:
-            form_val = float(p.get("form", 0) or 0)
-        except Exception:
-            form_val = 0.0
-
-        sp_tags = []
-        if p.get("penalties_order") == 1:
-            sp_tags.append("🎯 PK")
-        elif p.get("penalties_order") == 2:
-            sp_tags.append("PK-2")
-
-        if p.get("direct_freekicks_order") == 1:
-            sp_tags.append("⚡ FK")
-
-        if p.get("corners_and_indirect_freekicks_order") == 1:
-            sp_tags.append("🚩 CK")
-
-        sp_label = ", ".join(sp_tags) if sp_tags else "-"
-
-        all_players[p["web_name"]] = {
-            "id": p["id"],
-            "name": p["web_name"],
-            "full_name": f"{p['first_name']} {p['second_name']}",
-            "club": team_map.get(p["team"], "Unknown"),
-            "role": role_map.get(p["element_type"], "MID"),
-            "element_type": p["element_type"],
-            "min": int(p.get("minutes", 0)),
-            "xGI": round(xgi, 2),
-            "form": form_val,
-            "set_piece": sp_label,
-            "is_pk": p.get("penalties_order") == 1,
-            "is_fk": p.get("direct_freekicks_order") == 1,
-            "is_ck": p.get("corners_and_indirect_freekicks_order") == 1,
-            "price": f"£{p.get('now_cost', 0) / 10:.1f}m"
-        }
-
-    @st.cache_data(ttl=21600)
-    def fetch_live_odds(api_key):
-        if not api_key:
-            return []
-        url = f"https://api.the-odds-api.com/v4/sports/soccer_epl/odds/?apiKey={api_key}&regions=uk,eu&markets=h2h,totals&oddsFormat=decimal"
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        try:
-            with urllib.request.urlopen(req) as response:
-                return json.loads(response.read().decode())
-        except Exception:
-            return []
-
-    odds_data = fetch_live_odds(ODDS_API_KEY)
-
-    def normalize_team(name):
-        n = name.lower().replace("fc", "").replace("afc", "").replace("&", "and").strip()
-        aliases = {
-            "man city": "manchester city",
-            "man utd": "manchester united",
-            "spurs": "tottenham hotspur",
-            "tottenham": "tottenham hotspur",
-            "wolves": "wolverhampton wanderers",
-            "nott'm forest": "nottingham forest",
-            "west ham": "west ham united",
-            "newcastle": "newcastle united",
-            "brighton": "brighton and hove albion",
-            "leicester": "leicester city",
-            "ipswich": "ipswich town"
-        }
-        for k, v in aliases.items():
-            if k in n:
-                return v
-        return n
-
-    def get_market_odds(home_name, away_name):
-        h_norm = normalize_team(home_name)
-        a_norm = normalize_team(away_name)
+def calculate_player_metrics(p):
+    team_id = p["team"]
+    pos = element_types.get(p["element_type"], "MID")
+    
+    # Nilai Asas Prestasi
+    xgi = float(p.get("expected_goal_involvements", 0.0) or 0.0)
+    form = float(p.get("form", 0.0) or 0.0)
+    
+    # Nilai Tugasan Bola Mati
+    set_piece_bonus = 0.0
+    if p.get("penalties_order") == 1:
+        set_piece_bonus += 1.5
+    if p.get("corners_and_indirect_freekicks_order") in [1, 2]:
+        set_piece_bonus += 0.5
+    if p.get("direct_freekicks_order") in [1, 2]:
+        set_piece_bonus += 0.5
         
-        for ev in odds_data:
-            ev_h = normalize_team(ev.get("home_team", ""))
-            ev_a = normalize_team(ev.get("away_team", ""))
-            if (h_norm in ev_h or ev_h in h_norm) and (a_norm in ev_a or ev_a in a_norm):
-                bookmakers = ev.get("bookmakers", [])
-                if bookmakers:
-                    bm = bookmakers[0]
-                    o1, ox, o2, o25 = 2.00, 3.40, 3.20, 1.85
-                    for m in bm.get("markets", []):
-                        if m["key"] == "h2h":
-                            for out in m["outcomes"]:
-                                if out["name"] == ev["home_team"]: o1 = out["price"]
-                                elif out["name"] == ev["away_team"]: o2 = out["price"]
-                                else: ox = out["price"]
-                        elif m["key"] == "totals":
-                            for out in m["outcomes"]:
-                                if out["name"].lower() == "over" and out.get("point") == 2.5:
-                                    o25 = out["price"]
-                    return o1, ox, o2, o25
-        return 2.00, 3.40, 3.20, 1.85
-
-    st.sidebar.header(f"📅 {gw_name} (Pilihan Perlawanan)")
-
-    fixture_options = []
-    for idx, f in enumerate(fixtures_raw):
-        h = team_map.get(f["team_h"], f"Team {f['team_h']}")
-        a = team_map.get(f["team_a"], f"Team {f['team_a']}")
-        fixture_options.append(f"M{idx+1}: {h} vs {a}")
-
-    preset_mode = st.sidebar.selectbox(
-        "Pilihan Mod Pantas:",
-        [
-            "4 Perlawanan Terawal (Game 1-4)",
-            "4 Perlawanan Terakhir",
-            "Semua 10 Perlawanan",
-            "Pilih Bebas / Kustom (Tanda Sendiri)"
-        ]
-    )
-
-    if preset_mode == "4 Perlawanan Terawal (Game 1-4)":
-        default_sel = fixture_options[:4]
-    elif preset_mode == "4 Perlawanan Terakhir":
-        default_sel = fixture_options[-4:]
-    elif preset_mode == "Semua 10 Perlawanan":
-        default_sel = fixture_options
-    else:
-        default_sel = fixture_options[1:5] if len(fixture_options) >= 5 else fixture_options[:4]
-
-    selected_labels = st.sidebar.multiselect(
-        "Senarai Perlawanan:",
-        options=fixture_options,
-        default=default_sel,
-        key=f"sel_{preset_mode}"
-    )
-
-    if not selected_labels:
-        st.warning("⚠️ Sila pilih sekurang-kurangnya 1 perlawanan di menu sisi.")
-    else:
-        selected_indices = [fixture_options.index(lbl) for lbl in selected_labels]
-        selected_indices.sort()
-
-        matches = []
-        for idx in selected_indices:
-            f = fixtures_raw[idx]
-            h_team = team_map.get(f["team_h"], f"Team {f['team_h']}")
-            a_team = team_map.get(f["team_a"], f"Team {f['team_a']}")
-            auto_fdr_h = f.get("team_h_difficulty", 3)
-            auto_fdr_a = f.get("team_a_difficulty", 3)
+    # Unjuran Skor Kesukaran & Pertahanan
+    pred_score = (form * 1.2) + (xgi * 4.5) + set_piece_bonus
+    
+    if pos in ["GKP", "DEF"]:
+        # Asas Clean Sheet jika bermain
+        pred_score += 4.0
+        # Potongan 65% jika perlawanan dijangka ada lambakan gol
+        if len(odds_list) > 0:
+            pred_score *= 0.65
             
-            live_o1, live_ox, live_o2, live_o25 = get_market_odds(h_team, a_team)
-            
-            with st.sidebar.expander(f"M{idx+1}: {h_team} vs {a_team}", expanded=False):
-                st.markdown(f"**FDR Rasmi:** {h_team} (`{auto_fdr_h}`) vs {a_team} (`{auto_fdr_a}`)")
-                c1, c2, c3 = st.columns(3)
-                o1 = c1.number_input(f"1 ({h_team[:3]})", value=float(live_o1), step=0.05, key=f"o1_{idx}")
-                ox = c2.number_input("X", value=float(live_ox), step=0.05, key=f"ox_{idx}")
-                o2 = c3.number_input(f"2 ({a_team[:3]})", value=float(live_o2), step=0.05, key=f"o2_{idx}")
+    return round(pred_score, 1)
+
+eligible_players = []
+for p in raw_players:
+    # Tapis pasukan yang dipilih
+    if p["team"] not in selected_team_ids:
+        continue
+    # Tapis kecederaan kritikal
+    if p.get("chance_of_playing_next_round") is not None and p["chance_of_playing_next_round"] < 50:
+        continue
+    # Tapis senarai hitam
+    web_name = p.get("web_name", "").lower()
+    full_name = f"{p.get('first_name', '')} {p.get('second_name', '')}".lower()
+    if any(b in web_name or b in full_name for b in blacklist):
+        continue
+        
+    p_copy = dict(p)
+    p_copy["pos"] = element_types.get(p["element_type"], "MID")
+    p_copy["club"] = teams_dict.get(p["team"], "Unknown")
+    p_copy["score"] = calculate_player_metrics(p)
+    eligible_players.append(p_copy)
+
+# ==========================================
+# 5. FUNGSI PENJEJAK MATA SEBENAR (LIVE)
+# ==========================================
+def get_player_actual(p_id):
+    if not live_data:
+        return {"minutes": 0, "actual_pts": 0}
+    elements_live = live_data.get("elements", [])
+    matched = next((el for el in elements_live if el["id"] == p_id), None)
+    if matched:
+        stats = matched.get("stats", {})
+        return {
+            "minutes": stats.get("minutes", 0),
+            "actual_pts": stats.get("total_points", 0)
+        }
+    return {"minutes": 0, "actual_pts": 0}
+
+# ==========================================
+# 6. ENJIN GENERATOR PORTFOLIO (7 SKUAD)
+# ==========================================
+FORMATIONS = [
+    {"def": 3, "mid": 4, "fwd": 3, "name": "3-4-3 (Serangan Berbisa)"},
+    {"def": 3, "mid": 5, "fwd": 2, "name": "3-5-2 (Dominasi Tengah)"},
+    {"def": 4, "mid": 4, "fwd": 2, "name": "4-4-2 (Seimbang Standard)"},
+    {"def": 4, "mid": 3, "fwd": 3, "name": "4-3-3 (Triniti Sayap)"},
+    {"def": 5, "mid": 3, "fwd": 2, "name": "5-3-2 (Kubu Kebal)"},
+    {"def": 5, "mid": 4, "fwd": 1, "name": "5-4-1 (Pertahanan Padat)"},
+    {"def": 3, "mid": 4, "fwd": 3, "name": "3-4-3 (Differensial Berani)"}
+]
+
+st.title("🏆 Generator Portfolio FPL - 7 Skuad Dinamik")
+st.write(f"🟢 **Status:** Mengunci {len(selected_labels)} perlawanan ({len(eligible_players)} pemain layak melepasi tapisan).")
+
+if len(eligible_players) < 25:
+    st.warning("⚠️ Kolam pemain terlalu kecil. Sila pilih sekurang-kurangnya 4 hingga 5 perlawanan di menu sisi.")
+    st.stop()
+
+# Kiraan kekerapan pemain (had siling <= 43% / maks 3 kemunculan)
+usage_tracker = Counter()
+used_captains = set()
+squads_generated = []
+
+for i, fmt in enumerate(FORMATIONS):
+    squad_xi = []
+    
+    # Urutkan kolam mengikut unjuran tertinggi dan tapis had pendedahan
+    avail = [p for p in eligible_players if usage_tracker[p["id"]] < 3]
+    avail.sort(key=lambda x: x["score"], reverse=True)
+    
+    gkp_pool = [p for p in avail if p["pos"] == "GKP"]
+    def_pool = [p for p in avail if p["pos"] == "DEF"]
+    mid_pool = [p for p in avail if p["pos"] == "MID"]
+    fwd_pool = [p for p in avail if p["pos"] == "FWD"]
+    
+    # Pilih Barisan Utama mengikut Formasi
+    selected_gkp = gkp_pool[:1]
+    selected_def = def_pool[:fmt["def"]]
+    selected_mid = mid_pool[:fmt["mid"]]
+    selected_fwd = fwd_pool[:fmt["fwd"]]
+    
+    squad_xi = selected_gkp + selected_def + selected_mid + selected_fwd
+    
+    # Pilih Kapten Berbeza (Wajib MID/FWD)
+    att_candidates = [p for p in squad_xi if p["pos"] in ["MID", "FWD"]]
+    att_candidates.sort(key=lambda x: x["score"], reverse=True)
+    
+    capt = None
+    for cand in att_candidates:
+        if cand["id"] not in used_captains:
+            capt = cand
+            used_captains.add(cand["id"])
+            break
+    if not capt and att_candidates:
+        capt = att_candidates[0]
+        
+    # Pilih Naib Kapten
+    vc_candidates = [p for p in att_candidates if p["id"] != (capt["id"] if capt else -1)]
+    vc = vc_candidates[0] if vc_candidates else (squad_xi[1] if len(squad_xi) > 1 else squad_xi[0])
+    
+    # Rekodkan penggunaan pemain
+    for p in squad_xi:
+        usage_tracker[p["id"]] += 1
+        
+    # Pilih Bangku Simpanan (1 GKP, Baki DEF/MID/FWD)
+    bench = []
+    b_gkp = [p for p in gkp_pool if p not in squad_xi]
+    if b_gkp: bench.append(b_gkp[0])
+    b_others = [p for p in avail if p not in squad_xi and p not in bench]
+    bench.extend(b_others[:3])
+    
+    # Kiraan Mata Langsung Sebenar (Actual Points)
+    total_actual = 0
+    total_pred = 0
+    
+    c_act = get_player_actual(capt["id"]) if capt else {"actual_pts": 0, "minutes": 0}
+    vc_act = get_player_actual(vc["id"]) if vc else {"actual_pts": 0}  # Baris 475 yang telah dibaiki
+    
+    for p in squad_xi:
+        act_info = get_player_actual(p["id"])
+        total_pred += p["score"]
+        
+        # Logik Kapten / VC
+        if capt and p["id"] == capt["id"]:
+            if c_act.get("minutes", 0) > 0:
+                total_actual += act_info["actual_pts"] * 2
+            else:
+                total_actual += act_info["actual_pts"]
+                if vc and p["id"] == vc["id"]:
+                    total_actual += vc_act.get("actual_pts", 0)
+        else:
+            total_actual += act_info["actual_pts"]
+
+    squads_generated.append({
+        "index": i + 1,
+        "name": f"Skuad #{i+1} ({fmt['name']})",
+        "xi": squad_xi,
+        "bench": bench,
+        "capt": capt,
+        "vc": vc,
+        "total_pred": round(total_pred, 1),
+        "total_actual": total_actual
+    })
+
+# ==========================================
+# 7. PAPARAN KEPUTUSAN & PAPAN MARKAH
+# ==========================================
+st.subheader("📊 Papan Kedudukan Langsung 7 Skuad")
+leaderboard_data = []
+for sq in squads_generated:
+    leaderboard_data.append({
+        "Skuad": sq["name"],
+        "Kapten": sq["capt"]["web_name"] if sq["capt"] else "-",
+        "Naib Kapten": sq["vc"]["web_name"] if sq["vc"] else "-",
+        "Unjuran Mata": sq["total_pred"],
+        "Mata Sebenar (Live)": sq["total_actual"]
+    })
+
+df_leaderboard = pd.DataFrame(leaderboard_data)
+df_leaderboard = df_leaderboard.sort_values(by="Mata Sebenar (Live)", ascending=False).reset_index(drop=True)
+st.dataframe(df_leaderboard, use_container_width=True)
+
+st.write("---")
+
+# Paparan Terperinci Mengikut Tab
+tabs = st.tabs([f"Skuad #{sq['index']}" for sq in squads_generated])
+
+for idx, sq in enumerate(squads_generated):
+    with tabs[idx]:
+        col_info1, col_info2, col_info3 = st.columns(3)
+        col_info1.metric("Formasi", sq["name"].split("(")[-1].replace(")", ""))
+        col_info2.metric("Unjuran Mata", sq["total_pred"])
+        col_info3.metric("Mata Sebenar (Live)", sq["total_actual"])
+        
+        st.markdown(f"**Kapten (C):** `{sq['capt']['web_name'] if sq['capt'] else '-'}` | **Naib Kapten (VC):** `{sq['vc']['web_name'] if sq['vc'] else '-'}`")
+        
+        st.write("#### ⚽ Kesebelasan Utama (XI)")
+        xi_rows = []
+        for p in sq["xi"]:
+            act = get_player_actual(p["id"])
+            p_name = p["web_name"]
+            if sq["capt"] and p["id"] == sq["capt"]["id"]:
+                p_name += " (C)"
+            elif sq["vc"] and p["id"] == sq["vc"]["id"]:
+                p_name += " (VC)"
                 
-                cb1, cb2 = st.columns(2)
-                btts_y = cb1.number_input("BTTS Ya", value=1.75, step=0.05, key=f"by_{idx}")
-                o25 = cb2.number_input("Over 2.5", value=float(live_o25), step=0.05, key=f"o25_{idx}")
-                
-                matches.append({
-                    "id": f"M{idx+1}", "home": h_team, "away": a_team,
-                    "odds_1": o1, "odds_x": ox, "odds_2": o2,
-                    "btts_yes": btts_y, "over_25": o25,
-                    "fdr_h": auto_fdr_h, "fdr_a": auto_fdr_a
+            xi_rows.append({
+                "Pos": p["pos"],
+                "Pemain": p_name,
+                "Kelab": p["club"],
+                "Minit": act["minutes"],
+                "Unjuran": p["score"],
+                "Mata Sebenar": act["actual_pts"]
+            })
+        st.dataframe(pd.DataFrame(xi_rows), use_container_width=True)
+        
+        if sq["bench"]:
+            st.write("#### 🪑 Bangku Simpanan")
+            bench_rows = []
+            for p in sq["bench"]:
+                act = get_player_actual(p["id"])
+                bench_rows.append({
+                    "Pos": p["pos"],
+                    "Pemain": p["web_name"],
+                    "Kelab": p["club"],
+                    "Minit": act["minutes"],
+                    "Mata Sebenar": act["actual_pts"]
                 })
-
-        st.sidebar.header("2. Senarai Hitam Tambahan")
-        blacklist_input = st.sidebar.text_area("Pemain Ditolak (Nama Web FPL)", "Mateta, Caicedo, Philogene")
-        blacklist = [name.strip().lower() for name in blacklist_input.split(",") if name.strip()]
-
-        club_fdr = {}
-        match_rules = {}
-
-        for m in matches:
-            h, a = m["home"], m["away"]
-            club_fdr[h] = m["fdr_h"]
-            club_fdr[a] = m["fdr_a"]
-            
-            is_giant_home = (m["odds_1"] <= 1.50)
-            is_giant_away = (m["odds_2"] <= 1.50)
-            btts_extreme = (m["btts_yes"] < 1.65)
-            
-            underdog = a if is_giant_home else (h if is_giant_away else None)
-            match_rules[m["id"]] = {
-                "underdog": underdog, 
-                "all_attack": btts_extreme,
-                "btts_val": m["btts_yes"],
-                "over_25_val": m["over_25"]
-            }
-
-        def calculate_official_fpl_points(p, m_rule):
-            role = p["role"]
-            xgi = p["xGI"]
-            form = p["form"]
-            
-            pts_appearance = 2.0 
-            goal_multiplier = 6 if role in ["GKP", "DEF"] else (5 if role == "MID" else 4)
-            assist_multiplier = 3.0
-            
-            est_goals = xgi * 0.45
-            est_assists = xgi * 0.55
-            pts_attacking = (est_goals * goal_multiplier) + (est_assists * assist_multiplier)
-            
-            fdr = club_fdr.get(p["club"], 3)
-            clean_sheet_prob = max(0.05, (6 - fdr) / 5.0)
-            
-            if m_rule and (m_rule["all_attack"] or m_rule["over_25_val"] < 1.75):
-                clean_sheet_prob *= 0.35
-                
-            pts_clean_sheet = 0.0
-            if role in ["GKP", "DEF"]:
-                pts_clean_sheet = clean_sheet_prob * 4.0
-            elif role == "MID":
-                pts_clean_sheet = clean_sheet_prob * 1.0
-                
-            pts_saves = 1.0 if role == "GKP" else 0.0
-            
-            sp_bonus = 0.0
-            if p.get("is_pk"):
-                sp_bonus += 1.5
-            if p.get("is_fk") or p.get("is_ck"):
-                sp_bonus += 0.5
-                
-            form_bonus = form * 0.2
-            
-            total_projected_fpl_pts = pts_appearance + pts_attacking + pts_clean_sheet + pts_saves + sp_bonus + form_bonus
-            return round(max(1.0, total_projected_fpl_pts), 2)
-
-        eligible_players = {}
-        for p_name, p in all_players.items():
-            if any(b in p_name.lower() or b in p["full_name"].lower() for b in blacklist):
-                continue
-                
-            p_club = p["club"]
-            m_info = next((m for m in matches if m["home"].lower() in p_club.lower() or m["away"].lower() in p_club.lower()), None)
-            
-            if not m_info:
-                continue
-                
-            r = match_rules[m_info["id"]]
-            
-            if r["underdog"] and r["underdog"].lower() in p_club.lower():
-                if p["role"] in ["GKP", "DEF"] and p["xGI"] < 0.10 and not (p.get("is_fk") or p.get("is_ck")):
-                    continue
-            
-            if r["all_attack"] and p["role"] in ["GKP", "DEF"]:
-                if p["role"] == "GKP":
-                    pass
-                elif p["xGI"] < 0.05 and not (p.get("is_fk") or p.get("is_ck")):
-                    continue
-                    
-            p_data = dict(p)
-            p_data["fdr"] = club_fdr.get(p_club, 3)
-            p_data["fdr_score"] = calculate_official_fpl_points(p, r)
-            eligible_players[p_name] = p_data
-
-        odds_badge = "🟢 Auto-Odds Aktif" if odds_data else "🟡 Odds Asas Digunakan"
-        live_badge = "⚡ Data Mata Sebenar Aktif" if actual_stats else "⏳ Menunggu Perlawanan Bermula"
-        st.info(f"🟢 **Status ({gw_name}):** Mengunci **{len(matches)} perlawanan** | **{len(eligible_players)} pemain layak** | {odds_badge} | {live_badge}")
-
-        BLUEPRINTS = [
-            {"name": "Skuad 1 (4-3-3 Attacking / 4-2-1-3)", "formation": "4-3-3", "xi": {"GKP": 1, "DEF": 4, "MID": 3, "FWD": 3}},
-            {"name": "Skuad 2 (3-4-3 Wing-Backs Attack)", "formation": "3-4-3", "xi": {"GKP": 1, "DEF": 3, "MID": 4, "FWD": 3}},
-            {"name": "Skuad 3 (4-1-2-3 Heavy Attack)", "formation": "4-3-3", "xi": {"GKP": 1, "DEF": 4, "MID": 3, "FWD": 3}},
-            {"name": "Skuad 4 (4-2-3-1 Modern Possession)", "formation": "4-2-3-1", "xi": {"GKP": 1, "DEF": 4, "MID": 5, "FWD": 1}},
-            {"name": "Skuad 5 (3-5-2 Midfield Control)", "formation": "3-5-2", "xi": {"GKP": 1, "DEF": 3, "MID": 5, "FWD": 2}},
-            {"name": "Skuad 6 (4-5-1 Defensive Solid)", "formation": "4-5-1", "xi": {"GKP": 1, "DEF": 4, "MID": 5, "FWD": 1}},
-            {"name": "Skuad 7 (5-4-1 Low Block Counter)", "formation": "5-4-1", "xi": {"GKP": 1, "DEF": 5, "MID": 4, "FWD": 1}}
-        ]
-
-        def get_match_id(club):
-            for m in matches:
-                if m["home"].lower() in club.lower() or m["away"].lower() in club.lower():
-                    return m["id"]
-            return None
-
-        def get_player_actual(p_id):
-            return actual_stats.get(p_id, {"actual_pts": 0, "minutes": 0, "goals": 0, "assists": 0, "clean_sheets": 0, "bonus": 0})
-
-        def build_portfolio():
-            global_counts = Counter()
-            squads = []
-            used_captains = set()
-            
-            sorted_pool = sorted(
-                eligible_players.values(),
-                key=lambda x: (x["fdr"] <= 2, x["min"] >= 60, x["fdr_score"]),
-                reverse=True
-            )
-            
-            for bp in BLUEPRINTS:
-                selected = []
-                club_counts = Counter()
-                role_counts = Counter()
-                limits = {"GKP": 2, "DEF": 5, "MID": 5, "FWD": 3}
-                
-                cap_candidates = [
-                    p for p in sorted_pool 
-                    if global_counts[p["name"]] < 3 and p["fdr"] <= 3 and p["role"] in ["MID", "FWD"] and p["name"] not in used_captains
-                ]
-                
-                if cap_candidates:
-                    cap = cap_candidates[0]
-                else:
-                    fallback_cands = [p for p in sorted_pool if p["role"] in ["MID", "FWD"] and p["name"] not in used_captains]
-                    cap = fallback_cands[0] if fallback_cands else sorted_pool[0]
-                
-                used_captains.add(cap["name"])
-                selected.append(cap)
-                club_counts[cap["club"]] += 1
-                role_counts[cap["role"]] += 1
-                
-                for p in sorted_pool:
-                    if len(selected) == 15:
-                        break
-                    if p["name"] in [x["name"] for x in selected]:
-                        continue
-                    if global_counts[p["name"]] >= 3:
-                        continue
-                    if club_counts[p["club"]] >= 3:
-                        continue
-                    if role_counts[p["role"]] >= limits[p["role"]]:
-                        continue
-                        
-                    selected.append(p)
-                    club_counts[p["club"]] += 1
-                    role_counts[p["role"]] += 1
-                    
-                cap_m = get_match_id(cap["club"])
-                vc_cands = [p for p in selected if get_match_id(p["club"]) != cap_m and p["name"] != cap["name"]]
-                vc = max(vc_cands, key=lambda x: x["fdr_score"]) if vc_cands else (selected[1] if len(selected) > 1 else cap)
-                
-                xi_roles = dict(bp["xi"])
-                xi = []
-                bench = []
-                
-                for priority_p in [cap, vc]:
-                    if priority_p:
-                        r = priority_p["role"]
-                        if xi_roles.get(r, 0) > 0 and priority_p not in xi:
-                            xi.append(priority_p)
-                            xi_roles[r] -= 1
-                            
-                rem = [p for p in selected if p not in xi]
-                rem.sort(key=lambda x: x["fdr_score"], reverse=True)
-                
-                for p in rem:
-                    r = p["role"]
-                    if xi_roles.get(r, 0) > 0:
-                        xi.append(p)
-                        xi_roles[r] -= 1
-                    else:
-                        bench.append(p)
-                        
-                bench_g = [p for p in bench if p["role"] == "GKP"]
-                bench_out = sorted([p for p in bench if p["role"] != "GKP"], key=lambda x: x["fdr_score"], reverse=True)
-                
-                # Unjuran Mata (Predicted Points)
-                total_proj_pts = sum([p["fdr_score"] for p in xi]) + cap["fdr_score"]
-                
-                # Mata Sebenar FPL (Actual Live Points)
-                cap_act = get_player_actual(cap["id"])
-                vc_act = get_player_actual(vc["id"]) if vc else {"actual_pts": 0
+            st.dataframe(pd.DataFrame(bench_rows), use_container_width=True)
